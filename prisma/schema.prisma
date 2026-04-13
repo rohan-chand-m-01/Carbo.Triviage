@@ -1,0 +1,200 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  CORPORATE
+  SUPPLY_CHAIN
+  POLICY
+  ANALYST
+  PUBLIC
+  AUDITOR
+  ADMIN
+  GOVERNMENT
+}
+
+enum SubscriptionTier {
+  FREE
+  PRO
+  ENTERPRISE
+  API
+}
+
+model Organisation {
+  id               String           @id @default(cuid())
+  name             String
+  clerkOrgId       String?          @unique
+  subscriptionTier SubscriptionTier @default(FREE)
+  stripeCustomerId String?          @unique
+  whiteLabel       Boolean          @default(false)
+  primaryColor     String?
+  logoUrl          String?
+  customDomain     String?
+  dataResidency    String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  users            User[]
+  suppliers        Supplier[]
+  facilities       Facility[]
+  declarations     CbamDeclaration[]
+  emissionRecords  EmissionRecord[]
+  auditorAccess    AuditorOrgAccess[]
+  referralClicks   ReferralClick[]
+  apiKeys          OrgApiKey[]
+}
+
+model User {
+  id           String        @id @default(cuid())
+  clerkUserId  String        @unique
+  email        String        @unique
+  role         UserRole      @default(PUBLIC)
+  orgId        String?
+  org          Organisation? @relation(fields: [orgId], references: [id])
+  aiQueryCount Int           @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model Supplier {
+  id                 String       @id @default(cuid())
+  orgId              String
+  org                Organisation @relation(fields: [orgId], references: [id])
+  name               String
+  country            String       // ISO 3166-1 alpha-2
+  hsCode             String?      // HS6 code for Comtrade queries
+  carbonIntensity    Float?       // tCO2e per unit of product
+  intensitySource    String?      // e.g. "electricity_maps", "world_bank", "user_provided"
+  intensityUpdatedAt DateTime?
+  tier               Int          @default(1) // supply chain tier
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@index([orgId])
+}
+
+model Facility {
+  id              String         @id @default(cuid())
+  orgId           String
+  org             Organisation   @relation(fields: [orgId], references: [id])
+  name            String
+  country         String
+  gridZone        String?        // Electricity Maps zone key, e.g. "DE", "US-CAL-CISO"
+  latitude        Float?
+  longitude       Float?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  emissionRecords EmissionRecord[]
+
+  @@index([orgId])
+}
+
+model EmissionRecord {
+  id                         String       @id @default(cuid())
+  orgId                      String
+  org                        Organisation @relation(fields: [orgId], references: [id])
+  facilityId                 String?
+  facility                   Facility?    @relation(fields: [facilityId], references: [id])
+  scope                      Int          // 1, 2, or 3
+  category                   String       // "electricity" | "transport" | "purchased_goods" | etc.
+  value                      Float        // tCO2e
+  unit                       String       @default("tCO2e")
+  period                     String       // e.g. "2024-Q1" or "2024"
+  sourceUrl                  String?
+  evidenceRef                String?      // Neo4j node ID linking to audit trail
+  isContributedToMarketplace Boolean      @default(false) // opt-in to anonymised data marketplace
+  createdAt                  DateTime     @default(now())
+
+  @@index([orgId])
+  @@index([period])
+  @@index([orgId, period])
+}
+
+model CbamDeclaration {
+  id              String       @id @default(cuid())
+  orgId           String
+  org             Organisation @relation(fields: [orgId], references: [id])
+  declarationYear Int
+  quarter         Int
+  importedGoods   Json         // Array: {hsCode, originCountry, quantity, unit, embeddedCarbonTco2e}
+  totalEmissions  Float        // tCO2e
+  totalLiabilityEur Float?     // Calculated: embeddedCarbon × (ETS_price - origin_carbon_price)
+  status          String       @default("DRAFT") // DRAFT | SUBMITTED | VERIFIED
+  filedAt         DateTime?
+  stripePaymentId String?
+  auditNodeId     String?      // Neo4j node ID for the declaration audit record
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([orgId])
+}
+
+model PolicyDocument {
+  id           String    @id @default(cuid())
+  sourceUrl    String    @unique
+  title        String
+  type         String    // "REGULATION" | "DIRECTIVE" | "NDC" | "PAPER"
+  jurisdiction String    // "EU" | "UN" | "US" | "IN" | etc.
+  publishedAt  DateTime?
+  content      String    @db.Text
+  embedding    Unsupported("vector(768)")?  // Gemini text-embedding-004 outputs 768 dimensions
+  createdAt    DateTime  @default(now())
+}
+
+model MarketplaceEmissionFactor {
+  id          String   @id @default(cuid())
+  hsCode      String
+  country     String
+  factor      Float    // tCO2e per unit (anonymised aggregate)
+  sampleSize  Int      // number of contributing records (min 5 to publish)
+  period      String
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  @@unique([hsCode, country, period])
+  @@index([hsCode])
+  @@index([country])
+}
+
+model AuditorOrgAccess {
+  id        String       @id @default(cuid())
+  auditorId String       // User.id of the auditor
+  orgId     String
+  org       Organisation @relation(fields: [orgId], references: [id])
+  grantedAt DateTime     @default(now())
+  expiresAt DateTime?
+
+  @@unique([auditorId, orgId])
+  @@index([auditorId])
+  @@index([orgId])
+}
+
+model ReferralClick {
+  id        String       @id @default(cuid())
+  orgId     String
+  org       Organisation @relation(fields: [orgId], references: [id])
+  provider  String       // "gold_standard" | "verra"
+  creditUrl String
+  clickedAt DateTime     @default(now())
+
+  @@index([orgId])
+}
+
+model OrgApiKey {
+  id          String       @id @default(cuid())
+  orgId       String
+  org         Organisation @relation(fields: [orgId], references: [id])
+  keyHash     String       @unique // Store bcrypt hash, never plaintext
+  label       String
+  lastUsedAt  DateTime?
+  createdAt   DateTime     @default(now())
+  revokedAt   DateTime?
+
+  @@index([orgId])
+}
