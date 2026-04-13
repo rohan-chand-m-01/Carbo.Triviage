@@ -1,3 +1,4 @@
+import { ClerkProvider } from '@clerk/nextjs'
 import './globals.css'
 import { Inter } from 'next/font/google'
 import { AIProvider } from '@/components/ai-provider'
@@ -15,10 +16,12 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <AIProvider>
-      <html lang="en">
-        <body className={inter.className}>{children}</body>
-      </html>
-    </AIProvider>
+    <ClerkProvider>
+      <AIProvider>
+        <html lang="en">
+          <body className={inter.className}>{children}</body>
+        </html>
+      </AIProvider>
+    </ClerkProvider>
   )
 }
